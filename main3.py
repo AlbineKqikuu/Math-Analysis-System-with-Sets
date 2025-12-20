@@ -146,9 +146,10 @@ class SetApp:
         ops.pack(anchor=tk.W, pady=5)
 
         for sym in ["∪", "∩", "\\", "Δ", "(", ")"]:
+            # Fixed: Also add spaces for set difference \ for better readability
             ttk.Button(
                 ops, text=sym,
-                command=lambda s=sym: self.add_expr(f" {s} " if s not in "()\\" else s)
+                command=lambda s=sym: self.add_expr(f" {s} " if s not in "()" else s)
             ).pack(side=tk.LEFT, padx=5)
 
         row2 = ttk.Frame(self.ops_frame)
@@ -179,7 +180,7 @@ class SetApp:
         try:
             self.current_result = evaluate_expression(expr, self.current_sets)
         except Exception as e:
-            messagebox.showerror("Gabim", str(e))
+            messagebox.showerror("Gabim", f"Gabim në llogaritje: {str(e)}")
             return
 
         self.output.insert(tk.END, f"Shprehja:\n{expr}\n\nBashkësitë:\n")
@@ -201,6 +202,21 @@ class SetApp:
 
         self.output.insert(tk.END, build_membership_table(self.current_sets, self.current_result))
 
+    # ------------------ UTILS ------------------
+    def evaluate_symbolic(self, rid: str, labels: list[str]) -> bool:
+        """Evaluates if a specific region (bitmask) is part of the result."""
+        test_sets = {l: set() for l in labels}
+        for i, bit in enumerate(rid):
+            if bit == '1':
+                test_sets[labels[i]].add("x")
+        
+        expr = self.expr_var.get().strip()
+        if not expr: return False
+        try:
+            res = evaluate_expression(expr, test_sets)
+            return "x" in res
+        except: return False
+
     # ------------------ VENN ------------------
     def draw_venn(self):
         if not HAS_VENN:
@@ -211,138 +227,148 @@ class SetApp:
             self.compute()
 
         n = len(self.current_sets)
+        plt.close('all') # Clear previous plots
 
-        # -------- 2 BASHKËSI (FILTRUAR) --------
+        # -------- 2 BASHKËSI --------
         if n == 2:
+            labels_list = ["A", "B"]
             A, B = self.current_sets["A"], self.current_sets["B"]
-            R = self.current_result
-
-            A_only = (A - B) & R
-            B_only = (B - A) & R
-            AB = (A & B) & R
-
-            plt.figure(figsize=(7, 7))
-            v = venn2([A, B], set_labels=("A", "B"))
-
-            def txt(s): return "\n".join(sorted(s)) if s else ""
-
-            if v.get_label_by_id("10"): v.get_label_by_id("10").set_text(txt(A_only))
-            if v.get_label_by_id("01"): v.get_label_by_id("01").set_text(txt(B_only))
-            if v.get_label_by_id("11"): v.get_label_by_id("11").set_text(txt(AB))
-
-            if not A_only and v.get_patch_by_id("10"): v.get_patch_by_id("10").set_alpha(0.2)
-            if not B_only and v.get_patch_by_id("01"): v.get_patch_by_id("01").set_alpha(0.2)
-            if not AB and v.get_patch_by_id("11"): v.get_patch_by_id("11").set_alpha(0.2)
-
-            title_text = f"Venn – Rezultati i shprehjes\n{self.expr_var.get()}"
+            plt.figure(figsize=(8, 7))
+            v = venn2([A, B], set_labels=labels_list)
             
-            if A.issubset(B) and B.issubset(A):
-                title_text += "\n(A ⊆ B dhe B ⊆ A)"
-            elif A.issubset(B):
-                title_text += "\n(A ⊆ B)"
-            elif B.issubset(A):
-                title_text += "\n(B ⊆ A)"
+            regions_map = {"10": A - B, "01": B - A, "11": A & B}
+            for rid, elems in regions_map.items():
+                patch = v.get_patch_by_id(rid)
+                label = v.get_label_by_id(rid)
+                if label: label.set_text("\n".join(sorted(elems)) if elems else "")
+                is_active = self.evaluate_symbolic(rid, labels_list)
+                if patch:
+                    patch.set_alpha(0.8 if is_active else 0.2)
+                    if is_active:
+                        patch.set_edgecolor('black')
+                        patch.set_linewidth(2)
 
-            plt.title(title_text)
+            plt.title(f"Diagrami i Vennit (2 bashkësi):\n{self.expr_var.get()}", pad=20)
             plt.show()
             return
 
-        # -------- 3 BASHKËSI (INFORMATIV I SAKTË) --------
+        # -------- 3 BASHKËSI --------
         if n == 3:
-            keys = list(self.current_sets.keys())
-            A, B, C = self.current_sets[keys[0]], self.current_sets[keys[1]], self.current_sets[keys[2]]
+            labels_list = ["A", "B", "C"]
+            A, B, C = (self.current_sets[l] for l in labels_list)
+            plt.figure(figsize=(9, 8))
+            v = venn3([A, B, C], set_labels=labels_list)
+            
+            universe = set().union(A, B, C)
+            regions_ids = ["100", "010", "110", "001", "101", "011", "111"]
+            for rid in regions_ids:
+                patch = v.get_patch_by_id(rid)
+                label = v.get_label_by_id(rid)
+                
+                # Calculate precise region elements
+                curr = universe.copy()
+                for i, bit in enumerate(rid):
+                    s = self.current_sets[labels_list[i]]
+                    curr = (curr & s) if bit == '1' else (curr - s)
+                
+                if label: label.set_text("\n".join(sorted(curr)) if curr else "")
+                is_active = self.evaluate_symbolic(rid, labels_list)
+                if patch:
+                    patch.set_alpha(0.8 if is_active else 0.2)
+                    if is_active:
+                        patch.set_edgecolor('black')
+                        patch.set_linewidth(2)
 
-            plt.figure(figsize=(7, 7))
-            v = venn3([A, B, C], set_labels=keys)
+            plt.title(f"Diagrami i Vennit (3 bashkësi):\n{self.expr_var.get()}", pad=20)
+            plt.show()
+            return
 
-            regions = {
-                "100": A - B - C,
-                "010": B - A - C,
-                "001": C - A - B,
-                "110": (A & B) - C,
-                "101": (A & C) - B,
-                "011": (B & C) - A,
-                "111": A & B & C,
+        # -------- 4 BASHKËSI (SHADED AREAS) --------
+        if n == 4:
+            import numpy as np
+            from matplotlib.patches import Ellipse
+            labels_list = ["A", "B", "C", "D"]
+            sets_data = [self.current_sets[l] for l in labels_list]
+            universe = set().union(*sets_data)
+
+            # High-res grid for pixel-perfect shading of complex operations
+            res = 400
+            gx = np.linspace(0, 10, res)
+            gy = np.linspace(0, 10, res)
+            X, Y = np.meshgrid(gx, gy)
+
+            # Ellipse definitions
+            ell_params = [
+                ((4.0, 5.0), 3.8, 7.8, 35),  # A
+                ((6.0, 5.0), 3.8, 7.8, -35), # B
+                ((4.0, 5.8), 3.8, 7.8, 35),  # C
+                ((6.0, 5.8), 3.8, 7.8, -35)  # D
+            ]
+
+            def get_mask(X, Y, center, w, h, angle_deg):
+                ang = np.radians(angle_deg)
+                cx, cy = center
+                a, b = w/2, h/2
+                dx, dy = X - cx, Y - cy
+                rx = dx * np.cos(ang) + dy * np.sin(ang)
+                ry = -dx * np.sin(ang) + dy * np.cos(ang)
+                return (rx**2 / a**2 + ry**2 / b**2) <= 1
+
+            masks = {labels_list[i]: get_mask(X, Y, *p) for i, p in enumerate(ell_params)}
+
+            # Evaluate the set expression on the bitmasks
+            expr_val = self.expr_var.get().strip()
+            # Convert expression to numpy-compatible bitwise logic
+            # Union: |, Intersection: &, SymDiff: ^, Diff: \ -> & ~
+            clean_expr = expr_val.replace("∪", "|").replace("∩", "&").replace("Δ", "^").replace("\\", "& ~")
+            for k in masks:
+                clean_expr = re.sub(rf"\b{k}\b", f"masks['{k}']", clean_expr)
+            
+            try:
+                result_mask = eval(clean_expr)
+            except:
+                result_mask = np.zeros_like(X, dtype=bool)
+
+            fig, ax = plt.subplots(figsize=(10, 10))
+            ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.set_aspect('equal')
+            ax.axis('off')
+
+            # Shade the resulting union/intersection area in Gold
+            if np.any(result_mask):
+                ax.contourf(X, Y, result_mask, levels=[0.5, 1.5], colors=['#FFD700'], alpha=0.5)
+
+            # Draw set outlines
+            colors = ['#ff4d4d', '#4dff4d', '#4d4dff', '#ffb347']
+            for i, p in enumerate(ell_params):
+                # Light fill
+                ax.add_patch(Ellipse(p[0], p[1], p[2], angle=p[3], fc=colors[i], alpha=0.1))
+                # Thick border
+                ax.add_patch(Ellipse(p[0], p[1], p[2], angle=p[3], ec=colors[i], fc='none', lw=2.5, zorder=10))
+
+            # Color-coded Legend at the top left
+            for i, l in enumerate(labels_list):
+                members = sorted(list(self.current_sets[l]))
+                ax.text(0.2, 9.8 - i*0.4, f"Bashkësia {l}: {members}", 
+                        color=colors[i], weight='bold', fontsize=9, ha='left', transform=ax.transData)
+
+            # Region Markers (Gold buttons for result-active areas)
+            centers = {
+                "1000": (1.8, 3.8), "0100": (8.2, 3.8), "0010": (1.8, 7.2), "0001": (8.2, 7.2),
+                "1100": (5.0, 1.8), "1010": (3.1, 5.5), "0101": (6.9, 5.5), "0011": (5.0, 9.2),
+                "1001": (4.3, 4.2), "0110": (5.7, 4.2), "1110": (3.8, 3.0), "1101": (6.2, 3.0),
+                "1011": (3.8, 8.0), "0111": (6.2, 8.0), "1111": (5.0, 5.5)
             }
 
-            for r, elems in regions.items():
-                if v.get_label_by_id(r):
-                    v.get_label_by_id(r).set_text("\n".join(sorted(elems)))
+            for bits, pos in centers.items():
+                if self.evaluate_symbolic(bits, labels_list):
+                    ax.plot(pos[0], pos[1], 'o', color='gold', markersize=14, markeredgecolor='black', zorder=15)
+                    ax.text(pos[0], pos[1], "R", ha='center', va='center', weight='bold', fontsize=8, zorder=16)
 
-            plt.title("Venn informativ (pa filtruar)")
+            plt.title(f"Rezultati i Shprehjes: {expr_val}", fontsize=14, pad=40)
             plt.show()
             return
 
-        # # -------- CASE: 4 BASHKËSI (SHPARËNDARJE E SAKTË) --------
-        # if n == 4:
-        #     import matplotlib.pyplot as plt
 
-        #     labels = list(self.current_sets.keys())
-        #     A, B, C, D = (self.current_sets[l] for l in labels)
-
-        #     Z = {
-        #         "A": A - (B | C | D),
-        #         "B": B - (A | C | D),
-        #         "C": C - (A | B | D),
-        #         "D": D - (A | B | C),
-
-        #         "AB": (A & B) - (C | D),
-        #         "AC": (A & C) - (B | D),
-        #         "AD": (A & D) - (B | C),
-        #         "BC": (B & C) - (A | D),
-        #         "BD": (B & D) - (A | C),
-        #         "CD": (C & D) - (A | B),
-
-        #         "ABC": (A & B & C) - D,
-        #         "ABD": (A & B & D) - C,
-        #         "ACD": (A & C & D) - B,
-        #         "BCD": (B & C & D) - A,
-
-        #         "ABCD": A & B & C & D,
-        #     }
-
-        #     positions = {
-        #         "A": (0.1, 0.85), "B": (0.9, 0.85),
-        #         "C": (0.1, 0.15), "D": (0.9, 0.15),
-
-        #         "AB": (0.5, 0.9), "AC": (0.2, 0.55),
-        #         "AD": (0.5, 0.55), "BC": (0.5, 0.55),
-        #         "BD": (0.8, 0.55), "CD": (0.5, 0.2),
-
-        #         "ABC": (0.35, 0.7), "ABD": (0.65, 0.7),
-        #         "ACD": (0.35, 0.35), "BCD": (0.65, 0.35),
-
-        #         "ABCD": (0.5, 0.5),
-        #     }
-
-        #     plt.figure(figsize=(10, 10))
-        #     ax = plt.gca()
-        #     ax.axis("off")
-        #     ax.set_title("Diagram i saktë për 4 bashkësi", fontsize=16)
-
-        #     def fmt(s):
-        #         try:
-        #             return "\n".join(sorted(s, key=lambda x: int(x)))
-        #         except:
-        #             return "\n".join(sorted(s))
-
-        #     for k, (x, y) in positions.items():
-        #         ax.text(
-        #             x, y,
-        #             fmt(Z[k]),
-        #             ha="center", va="center",
-        #             fontsize=10,
-        #             bbox=dict(boxstyle="round,pad=0.3", fc="#eef6ff", ec="#aaccee")
-        #         )
-
-        #     # Etiketat
-        #     ax.text(0.1, 0.95, labels[0], fontsize=14, weight="bold")
-        #     ax.text(0.9, 0.95, labels[1], fontsize=14, weight="bold")
-        #     ax.text(0.1, 0.05, labels[2], fontsize=14, weight="bold")
-        #     ax.text(0.9, 0.05, labels[3], fontsize=14, weight="bold")
-
-        #     plt.show()
-        #     return  
         
     # ------------------ METRICS ------------------
     def get_code_metrics(self, file_path):
